@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # <xbar.title>Claude Usage</xbar.title>
-# <xbar.version>v1.0</xbar.version>
-# <xbar.desc>Claude 구독(Pro/Max)의 5시간 세션 · 주간 사용량을 메뉴 막대에 표시합니다.</xbar.desc>
+# <xbar.version>v1.1</xbar.version>
+# <xbar.desc>Claude 구독(Pro/Max/Team)의 5시간 세션 · 주간 사용량을 메뉴 막대에 표시합니다. 여러 계정 지원.</xbar.desc>
 # <xbar.dependencies>python3, Claude Code (로그인 상태)</xbar.dependencies>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
@@ -10,9 +10,15 @@
 Xcode 없이 쓰는 Claude 사용량 메뉴 막대 플러그인 (SwiftBar / xbar).
 
 파일 이름의 `.1m.` 은 1분마다 실행된다는 뜻이다.
-Claude Code 가 키체인에 저장한 OAuth 토큰을 읽어 Claude Code 의 `/usage` 와
-같은 엔드포인트를 조회한다. 429(요청 한도 초과) 응답을 받으면 캐시를 보여주며 잠시 쉰다.
+Claude Code 가 저장한 OAuth 토큰을 읽어 Claude Code 의 `/usage` 와 같은 엔드포인트를 조회한다.
+
+여러 계정: Claude Code 를 계정마다 다른 설정 폴더로 로그인하면
+(예: `CLAUDE_CONFIG_DIR=~/.claude-max claude` 후 `/login`) 키체인에
+`Claude Code-credentials-…` 항목이 따로 생긴다. 이 플러그인은 그런 항목과
+`~/.claude*/.credentials.json` 을 모두 찾아 계정별로 표시한다.
+429(요청 한도 초과) 응답을 받으면 해당 계정은 캐시를 보여주며 잠시 쉰다.
 """
+import hashlib
 import json
 import os
 import re
@@ -23,10 +29,12 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-ENDPOINT = os.environ.get("CLAUDE_USAGE_ENDPOINT", "https://api.anthropic.com/api/oauth/usage")
-KEYCHAIN_SERVICE = "Claude Code-credentials"
+API_BASE = os.environ.get("CLAUDE_USAGE_API_BASE", "https://api.anthropic.com")
+SECURITY = os.environ.get("CLAUDE_USAGE_SECURITY_BIN", "/usr/bin/security")
+KEYCHAIN_PREFIX = "Claude Code-credentials"
 CACHE_PATH = os.path.expanduser("~/Library/Caches/claude-usage-swiftbar.json")
 DEFAULT_BACKOFF = 5 * 60
+PROFILE_TTL = 24 * 3600
 
 TITLES = {
     "five_hour": "5시간 세션",
@@ -38,6 +46,13 @@ TITLES = {
 }
 ORDER = list(TITLES)
 SHORT = {"five_hour": "5h", "seven_day": "7d"}
+# 응답에는 내부 코드명 항목(예: iguana_necktie)이 섞여 올 수 있다.
+# 알려진 한도와 5시간 / 주간 계열 키만 표시한다.
+DISPLAY_PREFIXES = ("five_hour", "seven_day")
+
+
+def is_displayed(key):
+    return key in TITLES or key.startswith(DISPLAY_PREFIXES)
 
 CLAUDE_ORANGE = "#D97757"
 
@@ -50,17 +65,6 @@ class UsageError(Exception):
 
 # ---------------------------------------------------------------- credentials
 
-def read_keychain():
-    try:
-        out = subprocess.run(
-            ["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
-
-
 def parse_credentials(text):
     try:
         oauth = json.loads(text)["claudeAiOauth"]
@@ -72,25 +76,61 @@ def parse_credentials(text):
     return {"token": token, "plan": oauth.get("subscriptionType")}
 
 
-def load_credentials():
-    raw = read_keychain()
-    if raw:
-        creds = parse_credentials(raw)
-        if creds:
-            return creds
+def run_security(args):
+    try:
+        out = subprocess.run([SECURITY] + args, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def keychain_services():
+    """키체인에서 `Claude Code-credentials*` 서비스 이름을 모두 찾는다 (비밀 값은 읽지 않음)."""
+    dump = run_security(["dump-keychain"]) or ""
+    names = set(re.findall(r'"svce"<blob>="(%s[^"]*)"' % re.escape(KEYCHAIN_PREFIX), dump))
+    names.add(KEYCHAIN_PREFIX)
+    # 기본 항목을 먼저, 나머지는 이름순
+    return sorted(names, key=lambda n: (n != KEYCHAIN_PREFIX, n))
+
+
+def credential_files():
+    home = os.path.expanduser("~")
     dirs = []
     if os.environ.get("CLAUDE_CONFIG_DIR"):
         dirs.append(os.path.expanduser(os.environ["CLAUDE_CONFIG_DIR"]))
-    dirs.append(os.path.expanduser("~/.claude"))
+    try:
+        dirs += sorted(os.path.join(home, d) for d in os.listdir(home) if d.startswith(".claude"))
+    except OSError:
+        pass
+    seen, files = set(), []
     for d in dirs:
+        path = os.path.join(d, ".credentials.json")
+        if path not in seen and os.path.isfile(path):
+            seen.add(path)
+            files.append(path)
+    return files
+
+
+def discover_accounts():
+    """[{key, source, token, plan}] — 같은 토큰은 한 번만."""
+    accounts, tokens = [], set()
+
+    def add(key, source, creds):
+        if creds and creds["token"] not in tokens:
+            tokens.add(creds["token"])
+            accounts.append(dict(creds, key=key, source=source))
+
+    for service in keychain_services():
+        raw = run_security(["find-generic-password", "-s", service, "-w"])
+        if raw and raw.strip():
+            add("keychain:" + service, service, parse_credentials(raw.strip()))
+    for path in credential_files():
         try:
-            with open(os.path.join(d, ".credentials.json"), encoding="utf-8") as f:
-                creds = parse_credentials(f.read())
+            with open(path, encoding="utf-8") as f:
+                add("file:" + path, path.replace(os.path.expanduser("~"), "~"), parse_credentials(f.read()))
         except OSError:
             continue
-        if creds:
-            return creds
-    raise UsageError("Claude Code 로그인 정보를 찾을 수 없습니다. 터미널에서 claude 실행 후 /login 하세요.")
+    return accounts
 
 
 # ---------------------------------------------------------------- API
@@ -120,7 +160,7 @@ def parse_windows(data):
         raise UsageError("사용량 응답을 해석할 수 없습니다.")
     windows = []
     for key, value in data.items():
-        if not isinstance(value, dict):
+        if not isinstance(value, dict) or not is_displayed(key):
             continue
         util = value.get("utilization")
         if not isinstance(util, (int, float)) or isinstance(util, bool):
@@ -132,19 +172,19 @@ def parse_windows(data):
     return windows
 
 
-def fetch(token):
-    req = urllib.request.Request(ENDPOINT, headers={
+def api_get(path, token):
+    req = urllib.request.Request(API_BASE + path, headers={
         "Authorization": "Bearer " + token,
         "anthropic-beta": "oauth-2025-04-20",
         "Accept": "application/json",
-        "User-Agent": "claude-usage-swiftbar/1.0",
+        "User-Agent": "claude-usage-swiftbar/1.1",
     })
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             body = resp.read()
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
-            raise UsageError("토큰이 만료되었습니다. 터미널에서 claude 를 한 번 실행하면 갱신됩니다.")
+            raise UsageError("토큰이 만료되었습니다. 이 계정으로 claude 를 한 번 실행하면 갱신됩니다.")
         if e.code == 429:
             retry = e.headers.get("Retry-After") if e.headers else None
             try:
@@ -156,9 +196,30 @@ def fetch(token):
     except (urllib.error.URLError, OSError) as e:
         raise UsageError("네트워크 오류: %s" % getattr(e, "reason", e))
     try:
-        return parse_windows(json.loads(body))
+        return json.loads(body)
     except ValueError:
         raise UsageError("사용량 응답을 해석할 수 없습니다.")
+
+
+def fetch_usage(token):
+    return parse_windows(api_get("/api/oauth/usage", token))
+
+
+def fetch_profile_label(token):
+    """계정 이메일 / 조직 이름 (실패하면 None). 계정 구분용이라 없어도 동작한다."""
+    try:
+        data = api_get("/api/oauth/profile", token)
+    except UsageError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    account = data.get("account") if isinstance(data.get("account"), dict) else {}
+    org = data.get("organization") if isinstance(data.get("organization"), dict) else {}
+    email = account.get("email") or account.get("email_address")
+    org_name = org.get("name")
+    if email and org_name and org_name not in email:
+        return "%s · %s" % (email, org_name)
+    return email or org_name
 
 
 # ---------------------------------------------------------------- cache
@@ -166,9 +227,12 @@ def fetch(token):
 def load_cache():
     try:
         with open(CACHE_PATH, encoding="utf-8") as f:
-            return json.load(f)
+            cache = json.load(f)
     except (OSError, ValueError):
-        return {}
+        return {"accounts": {}}
+    if not isinstance(cache.get("accounts"), dict):
+        return {"accounts": {}}  # 이전 버전(단일 계정) 캐시는 버린다
+    return cache
 
 
 def save_cache(cache):
@@ -182,23 +246,46 @@ def save_cache(cache):
         pass
 
 
-def update(now, force=False):
-    """API 를 조회해 캐시를 갱신하고 캐시를 돌려준다."""
-    cache = load_cache()
-    if not force and now < cache.get("next_allowed", 0):
-        return cache
+def token_id(token):
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def update_account(entry, account, now, force):
+    entry["source"] = account["source"]
+    if account.get("plan"):
+        entry["plan"] = account["plan"]
+    if not force and now < entry.get("next_allowed", 0):
+        return
     try:
-        creds = load_credentials()
-        if creds.get("plan"):
-            cache["plan"] = creds["plan"]
-        cache["windows"] = fetch(creds["token"])
-        cache["fetched_at"] = now
-        cache["error"] = None
-        cache["next_allowed"] = 0
+        entry["windows"] = fetch_usage(account["token"])
+        entry["fetched_at"] = now
+        entry["error"] = None
+        entry["next_allowed"] = 0
     except UsageError as e:
-        cache["error"] = str(e)
+        entry["error"] = str(e)
         if e.retry_after:
-            cache["next_allowed"] = now + e.retry_after
+            entry["next_allowed"] = now + e.retry_after
+        return
+    # 이메일 등 계정 이름은 하루에 한 번만 확인한다 (토큰이 바뀌면 다시)
+    tid = token_id(account["token"])
+    if entry.get("profile_token") != tid or now - entry.get("profile_checked", 0) > PROFILE_TTL:
+        entry["label"] = fetch_profile_label(account["token"]) or entry.get("label")
+        entry["profile_token"] = tid
+        entry["profile_checked"] = now
+
+
+def update(now, force=False):
+    cache = load_cache()
+    accounts = discover_accounts()
+    old = cache["accounts"]
+    cache["accounts"] = {}
+    cache["order"] = [a["key"] for a in accounts]
+    for account in accounts:
+        entry = old.get(account["key"], {})
+        update_account(entry, account, now, force)
+        cache["accounts"][account["key"]] = entry
+    cache["error"] = None if accounts else (
+        "Claude Code 로그인 정보를 찾을 수 없습니다. 터미널에서 claude 실행 후 /login 하세요.")
     save_cache(cache)
     return cache
 
@@ -240,52 +327,95 @@ def title(key):
     return TITLES.get(key, key.replace("_", " ").title())
 
 
+def plan_name(entry):
+    plan = entry.get("plan")
+    return plan.capitalize() if plan else "Claude"
+
+
+def short_names(entries):
+    """메뉴 막대용 계정 약칭: 플랜 첫 글자(T, M, P …), 겹치면 번호를 붙인다."""
+    names = [plan_name(e)[0].upper() for e in entries]
+    counts = {n: names.count(n) for n in names}
+    seen = {}
+    out = []
+    for n in names:
+        if counts[n] > 1:
+            seen[n] = seen.get(n, 0) + 1
+            out.append("%s%d" % (n, seen[n]))
+        else:
+            out.append(n)
+    return out
+
+
+def headline(entry, now):
+    """계정 하나의 메뉴 막대 요약 (5h 우선, 없으면 첫 한도)."""
+    windows = entry.get("windows") or []
+    if not windows:
+        return None
+    primary = next((w for w in windows if w["id"] == "five_hour"), windows[0])
+    return effective(primary, now)
+
+
 def render(cache, now):
-    windows = cache.get("windows") or []
-    error = cache.get("error")
+    entries = [cache["accounts"][k] for k in cache.get("order", []) if k in cache["accounts"]]
     lines = []
 
-    # 메뉴 막대 제목
-    if windows:
-        parts = []
-        for w in windows:
-            if w["id"] in SHORT:
-                parts.append("%s %d%%" % (SHORT[w["id"]], round(effective(w, now))))
-        if not parts:
-            parts.append("%d%%" % round(effective(windows[0], now)))
-        worst = max(effective(w, now) for w in windows)
+    # ---- 메뉴 막대 제목
+    with_data = [e for e in entries if e.get("windows")]
+    any_error = any(e.get("error") for e in entries) or cache.get("error")
+    if len(entries) == 1 and with_data:
+        e = entries[0]
+        parts = ["%s %d%%" % (SHORT[w["id"]], round(effective(w, now)))
+                 for w in e["windows"] if w["id"] in SHORT] or ["%d%%" % round(headline(e, now))]
         head = " · ".join(parts)
-        if error:
-            head += " ⚠︎"
-        attrs = "sfimage=gauge.with.dots.needle.50percent"
-        if worst >= 90:
-            attrs += " color=#FF3B30"
-        lines.append("%s | %s" % (head, attrs))
+    elif with_data:
+        shorts = short_names(entries)
+        parts = []
+        for short, e in zip(shorts, entries):
+            pct = headline(e, now)
+            parts.append("%s %s" % (short, "–" if pct is None else "%d%%" % round(pct)))
+        head = " · ".join(parts)
     else:
-        lines.append("Claude ⚠︎ | sfimage=gauge.with.dots.needle.0percent" if error else "Claude …")
+        head = "Claude"
+    if any_error:
+        head += " ⚠︎"
+    worst = max([effective(w, now) for e in with_data for w in e["windows"]] or [0])
+    attrs = "sfimage=gauge.with.dots.needle.%s" % ("50percent" if with_data else "0percent")
+    if worst >= 90:
+        attrs += " color=#FF3B30"
+    lines.append("%s | %s" % (head, attrs))
+    lines.append("---")
+
+    if cache.get("error"):
+        lines.append("⚠︎ %s | color=#FF3B30 size=11" % cache["error"])
+
+    # ---- 계정별 상세
+    shorts = short_names(entries)
+    for i, (short, e) in enumerate(zip(shorts, entries)):
+        if i:
+            lines.append("---")
+        name = plan_name(e)
+        if len(entries) > 1:
+            name = "[%s] %s" % (short, name)
+        lines.append("%s | size=13" % name)
+        lines.append("%s | size=11 color=gray" % (e.get("label") or e.get("source", "")))
+        for w in e.get("windows") or []:
+            pct = effective(w, now)
+            lines.append("%s   %d%% | color=%s" % (title(w["id"]), round(pct), color_for(pct)))
+            lines.append("%s | font=Menlo size=11 color=%s" % (bar(pct), color_for(pct)))
+            r = w.get("resets_at")
+            if r and r > now:
+                when = datetime.fromtimestamp(r).strftime("%m/%d %H:%M")
+                lines.append("%s 후 초기화 (%s) | size=11 color=gray" % (humanize(r - now), when))
+            elif r:
+                lines.append("초기화됨 | size=11 color=gray")
+        if e.get("error"):
+            lines.append("⚠︎ %s | color=#FF3B30 size=11" % e["error"])
+        if e.get("fetched_at"):
+            lines.append("업데이트: %s | size=11 color=gray"
+                         % datetime.fromtimestamp(e["fetched_at"]).strftime("%H:%M:%S"))
 
     lines.append("---")
-    plan = cache.get("plan")
-    lines.append("Claude 사용량%s | size=13" % ("  ·  " + plan.capitalize() if plan else ""))
-
-    for w in windows:
-        pct = effective(w, now)
-        lines.append("---")
-        lines.append("%s   %d%% | color=%s" % (title(w["id"]), round(pct), color_for(pct)))
-        lines.append("%s | font=Menlo size=11 color=%s" % (bar(pct), color_for(pct)))
-        r = w.get("resets_at")
-        if r and r > now:
-            when = datetime.fromtimestamp(r).strftime("%m/%d %H:%M")
-            lines.append("%s 후 초기화 (%s) | size=11 color=gray" % (humanize(r - now), when))
-        elif r:
-            lines.append("초기화됨 | size=11 color=gray")
-
-    lines.append("---")
-    if error:
-        lines.append("⚠︎ %s | color=#FF3B30 size=11" % error)
-    fetched = cache.get("fetched_at")
-    if fetched:
-        lines.append("업데이트: %s | size=11 color=gray" % datetime.fromtimestamp(fetched).strftime("%H:%M:%S"))
     lines.append("지금 새로고침 | refresh=true sfimage=arrow.clockwise")
     lines.append("claude.ai 사용량 열기 | href=https://claude.ai/settings/usage sfimage=safari")
     return "\n".join(lines)

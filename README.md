@@ -78,6 +78,26 @@ swiftbar/install.sh
 - 처음 실행할 때 키체인 접근 허용 창이 뜨면 **항상 허용**을 누르세요.
 - 수동 확인: `swiftbar/claude-usage.1m.py` 를 터미널에서 직접 실행하면 메뉴 내용이 출력됩니다.
 
+### 여러 계정 함께 보기 (예: Team + 개인 Max)
+
+Claude Code 는 설정 폴더 하나에 로그인 하나만 저장합니다. 두 번째 계정은 **다른 설정 폴더**로 로그인하세요.
+
+```bash
+# 첫 번째 계정: 평소처럼 (기본 폴더 ~/.claude)
+claude          # → /login 으로 Team 계정 로그인
+
+# 두 번째 계정: 별도 폴더
+CLAUDE_CONFIG_DIR=~/.claude-max claude    # → /login 으로 개인 Max 계정 로그인
+```
+
+플러그인은 키체인의 `Claude Code-credentials*` 항목과 `~/.claude*/.credentials.json` 을 모두 찾아
+계정별로 표시합니다. 메뉴 막대에는 `T 42% · M 18%` 처럼 플랜 첫 글자와 5시간 사용률이 나오고,
+메뉴에서 계정별 상세(가능하면 이메일 표시)를 볼 수 있습니다.
+
+- 두 번째 계정을 평소에 쓰려면 `alias claude-max='CLAUDE_CONFIG_DIR=~/.claude-max claude'` 를 셸 설정에 추가하세요.
+- 저장된 계정 목록 확인: `security dump-keychain | grep '"Claude Code-credentials'`
+- 토큰은 각 계정으로 `claude` 를 실행할 때 갱신되므로, 오래 안 쓴 계정은 "토큰이 만료되었습니다" 가 뜰 수 있습니다.
+
 ## 문제 해결
 
 | 증상 | 해결 |

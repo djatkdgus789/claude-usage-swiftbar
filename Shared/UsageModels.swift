@@ -27,6 +27,12 @@ struct UsageWindow: Codable, Hashable, Identifiable {
         "extra_usage",
     ]
 
+    /// 응답에는 내부 코드명 항목(예: `iguana_necktie`)이 섞여 올 수 있어
+    /// 알려진 한도와 5시간 / 주간 계열 키만 표시한다.
+    static func isDisplayable(_ key: String) -> Bool {
+        displayOrder.contains(key) || key.hasPrefix("five_hour") || key.hasPrefix("seven_day")
+    }
+
     static func title(for key: String) -> String {
         switch key {
         case "five_hour": return "5시간 세션"
