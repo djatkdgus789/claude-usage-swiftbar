@@ -388,55 +388,6 @@ def render_full(w, now):
     return out
 
 
-# ---- 주간 줄을 세로로 반 나눠 왼쪽: 주간 전체, 오른쪽: 주간 Fable
-# 메뉴의 고정폭 글꼴(Menlo)에서 한글은 다른 글꼴로 그려져 폭이 일정하지 않으므로
-# 정렬이 필요한 왼쪽 칸에는 ASCII 만 쓴다 (블록 문자 █ ░ 와 ↻ 도 폭이 달라 쓰지 않는다). 한 줄에는 색을 하나만 줄 수 있어
-# 막대 줄은 두 칸 중 더 높은 사용률의 색을 쓴다.
-SPLIT_BAR = 12
-SPLIT_COL = 18  # 왼쪽 칸 폭 (글자 수)
-SPLIT_STYLE = "font=Menlo size=12 trim=false"
-
-
-def humanize_short(seconds):
-    minutes = max(0, int(seconds // 60))
-    days, rem = divmod(minutes, 60 * 24)
-    hours, mins = divmod(rem, 60)
-    if days:
-        return "%dd %dh" % (days, hours)
-    if hours:
-        return "%dh %dm" % (hours, mins)
-    return "%dm" % mins
-
-
-def split_cells(w, label, now):
-    """(제목, 막대, 초기화, 사용률 또는 None)"""
-    if w is None:
-        return ("%s  -" % label, "[" + " " * SPLIT_BAR + "]", "응답에 없음", None)
-    pct = effective(w, now)
-    r = w.get("resets_at")
-    if r and r > now:
-        reset = "reset " + humanize_short(r - now)
-    elif r:
-        reset = "reset"
-    else:
-        reset = ""
-    filled = int(round(pct / 100 * SPLIT_BAR))
-    ascii_bar = "[" + "=" * filled + "." * (SPLIT_BAR - filled) + "]"
-    return ("%s %3d%%" % (label, round(pct)), ascii_bar, reset, pct)
-
-
-def render_split(weekly, fable, now):
-    left = split_cells(weekly, "Weekly", now)
-    right = split_cells(fable, "Fable ", now)
-    pcts = [p for p in (left[3], right[3]) if p is not None]
-    bar_color = color_for(max(pcts)) if pcts else "gray"
-    styles = ["", " color=%s" % bar_color, " color=gray"]
-    return [
-        "%s│ %s | %s%s" % (left[i].ljust(SPLIT_COL), right[i], SPLIT_STYLE, styles[i])
-        for i in range(3)
-    ]
-
-
 def render(cache, now):
     entries = [cache["accounts"][k] for k in cache.get("order", []) if k in cache["accounts"]]
     lines = []
@@ -479,16 +430,15 @@ def render(cache, now):
         if len(entries) > 1:
             name = "[%s] %s" % (short, name)
         lines.append("%s | size=13" % name)
-        windows = e.get("windows") or []
+        windows = list(e.get("windows") or [])
+        # 주간 Fable 은 주간 한도 바로 아래에 둔다
         fable = next((w for w in windows if is_fable(w["id"])), None)
-        weekly = next((w for w in windows if w["id"] == "seven_day"), None)
+        if fable is not None and any(w["id"] == "seven_day" for w in windows):
+            windows.remove(fable)
+            at = next(i for i, w in enumerate(windows) if w["id"] == "seven_day") + 1
+            windows.insert(at, fable)
         for w in windows:
-            if w is fable and weekly is not None:
-                continue  # 주간 줄 오른쪽 칸에 함께 표시
-            if w is weekly:
-                lines.extend(render_split(weekly, fable, now))
-            else:
-                lines.extend(render_full(w, now))
+            lines.extend(render_full(w, now))
         if e.get("error"):
             lines.append("⚠︎ %s | color=#FF3B30 size=11" % e["error"])
         if e.get("fetched_at"):
