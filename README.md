@@ -35,8 +35,8 @@ Open claude.ai usage
 ## Install
 
 ```bash
-git clone https://github.com/djatkdgus789/claude-usage-widget.git
-cd claude-usage-widget
+git clone https://github.com/djatkdgus789/claude-usage-swiftbar.git
+cd claude-usage-swiftbar
 swiftbar/install.sh
 ```
 
