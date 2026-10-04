@@ -9,6 +9,7 @@ final class ParsingTests: XCTestCase {
           "seven_day_oauth_apps": null,
           "seven_day_opus": {"utilization": 7.5, "resets_at": null},
           "seven_day_new_limit": {"utilization": 3, "resets_at": "2026-10-08T00:00:00Z"},
+          "iguana_necktie": {"utilization": 5, "resets_at": null},
           "extra_usage": {"is_enabled": false, "utilization": null}
         }
         """

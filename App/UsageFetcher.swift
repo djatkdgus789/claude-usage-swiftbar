@@ -67,13 +67,13 @@ enum UsageFetcher {
 
     /// 응답 예시:
     /// `{"five_hour":{"utilization":42.0,"resets_at":"2026-10-04T05:00:00.123+00:00"},"seven_day":{...},"seven_day_opus":null}`
-    /// 새 한도 종류가 추가되어도 표시되도록 `utilization`을 가진 모든 항목을 수집한다.
+    /// `utilization`을 가진 항목 중 표시 대상(`UsageWindow.isDisplayable`)만 수집한다.
     static func parseWindows(_ data: Data) throws -> [UsageWindow] {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw UsageError.invalidResponse
         }
         var windows: [UsageWindow] = []
-        for (key, value) in root {
+        for (key, value) in root where UsageWindow.isDisplayable(key) {
             guard let dict = value as? [String: Any],
                   let utilization = (dict["utilization"] as? NSNumber)?.doubleValue
             else { continue }
