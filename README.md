@@ -70,6 +70,7 @@ Xcode에서 직접 빌드하려면 `make open` 으로 프로젝트를 연 뒤 `C
 | 키체인 접근 허용 창이 뜸 | **항상 허용**을 누르면 이후에는 묻지 않습니다 |
 | 위젯 목록에 보이지 않음 | 앱이 `/Applications` 에 있고 한 번 이상 실행되었는지 확인. 그래도 안 되면 로그아웃 후 재로그인 |
 | 위젯에 "Claude Usage 앱을 실행하세요" | 메뉴 막대 앱이 실행 중인지 확인 |
+| "개발 팀 ID 를 찾지 못했습니다" | Xcode → Settings → Accounts → **Manage Certificates…** → `+` → *Apple Development* 로 인증서를 만들거나, Accounts 화면의 팀 ID(10자리)로 `make install TEAM=XXXXXXXXXX` |
 | 서명 오류 | Xcode → Settings → Accounts 에서 Apple ID 로그인 후 `make setup TEAM=<팀 ID>` |
 
 ## 프로젝트 구조
