@@ -1,0 +1,11 @@
+// 공통 설정. 개인 값은 Local.xcconfig 에 적습니다 (`make setup` 이 자동 생성).
+//
+// DEVELOPMENT_TEAM : Apple 개발자 팀 ID (무료 Apple ID 의 Personal Team 도 가능)
+// BUNDLE_ID_PREFIX : 고유한 번들 ID
+DEVELOPMENT_TEAM =
+BUNDLE_ID_PREFIX = com.example.claudeusage
+
+#include? "Local.xcconfig"
+
+// 위젯과 앱이 데이터를 공유하는 App Group (macOS 에서는 팀 ID 접두사 형식)
+APP_GROUP_ID = $(DEVELOPMENT_TEAM).$(BUNDLE_ID_PREFIX)
