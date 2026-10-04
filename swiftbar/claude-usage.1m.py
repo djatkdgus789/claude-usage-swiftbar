@@ -26,7 +26,6 @@ import re
 import subprocess
 import sys
 import time
-import unicodedata
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -386,59 +385,52 @@ def render_full(w, now):
 
 
 # ---- 주간 줄을 세로로 반 나눠 왼쪽: 주간 전체, 오른쪽: 주간 Fable
+# 메뉴의 고정폭 글꼴(Menlo)에서 한글은 다른 글꼴로 그려져 폭이 일정하지 않으므로
+# 정렬이 필요한 왼쪽 칸에는 ASCII 만 쓴다 (블록 문자 █ ░ 와 ↻ 도 폭이 달라 쓰지 않는다). 한 줄에는 색을 하나만 줄 수 있어
+# 막대 줄은 두 칸 중 더 높은 사용률의 색을 쓴다.
 SPLIT_BAR = 12
-SPLIT_COL = 20  # 왼쪽 칸 표시 폭 (고정폭 글꼴 기준 칸 수)
-ANSI_RESET = "\033[0m"
-ANSI_DIM = "\033[90m"
+SPLIT_COL = 18  # 왼쪽 칸 폭 (글자 수)
+SPLIT_STYLE = "font=Menlo size=12 trim=false"
 
 
-def text_width(text):
-    """고정폭 글꼴에서 차지하는 칸 수 (한글 등 전각 문자는 2칸)."""
-    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
-
-
-def pad(text, width):
-    return text + " " * max(0, width - text_width(text))
-
-
-def ansi_for(pct):
-    if pct >= 90:
-        return "\033[91m"  # 빨강
-    if pct >= 70:
-        return "\033[33m"  # 주황(노랑)
-    return ""
-
-
-def paint(text, code):
-    return code + text + ANSI_RESET if code else text
+def humanize_short(seconds):
+    minutes = max(0, int(seconds // 60))
+    days, rem = divmod(minutes, 60 * 24)
+    hours, mins = divmod(rem, 60)
+    if days:
+        return "%dd %dh" % (days, hours)
+    if hours:
+        return "%dh %dm" % (hours, mins)
+    return "%dm" % mins
 
 
 def split_cells(w, label, now):
-    """(제목 줄, 막대 줄, 초기화 줄, 색) — 항목이 없으면 회색 자리 표시."""
+    """(제목, 막대, 초기화, 사용률 또는 None)"""
     if w is None:
-        return ("%s  –" % label, "·" * SPLIT_BAR, "응답에 없음", ANSI_DIM)
+        return ("%s  -" % label, "[" + " " * SPLIT_BAR + "]", "응답에 없음", None)
     pct = effective(w, now)
     r = w.get("resets_at")
     if r and r > now:
-        reset = "↻ " + humanize(r - now)
+        reset = "reset " + humanize_short(r - now)
     elif r:
-        reset = "초기화됨"
+        reset = "reset"
     else:
         reset = ""
-    return ("%s  %d%%" % (label, round(pct)), bar(pct, SPLIT_BAR), reset, ansi_for(pct))
+    filled = int(round(pct / 100 * SPLIT_BAR))
+    ascii_bar = "[" + "=" * filled + "." * (SPLIT_BAR - filled) + "]"
+    return ("%s %3d%%" % (label, round(pct)), ascii_bar, reset, pct)
 
 
 def render_split(weekly, fable, now):
-    left = split_cells(weekly, "주간 전체", now)
-    right = split_cells(fable, "주간 Fable", now)
-    out = []
-    for i in range(3):
-        l_text, r_text = left[i], right[i]
-        l_code = left[3] if i < 2 else ANSI_DIM
-        r_code = right[3] if i < 2 else ANSI_DIM
-        line = paint(pad(l_text, SPLIT_COL), l_code) + "│ " + paint(r_text, r_code)
-        out.append("%s | font=Menlo size=%d ansi=true trim=false" % (line, 12 if i == 0 else 11))
-    return out
+    left = split_cells(weekly, "Weekly", now)
+    right = split_cells(fable, "Fable ", now)
+    pcts = [p for p in (left[3], right[3]) if p is not None]
+    bar_color = color_for(max(pcts)) if pcts else "gray"
+    styles = ["", " color=%s" % bar_color, " color=gray"]
+    return [
+        "%s│ %s | %s%s" % (left[i].ljust(SPLIT_COL), right[i], SPLIT_STYLE, styles[i])
+        for i in range(3)
+    ]
 
 
 def render(cache, now):
