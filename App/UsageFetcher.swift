@@ -3,6 +3,7 @@ import Foundation
 enum UsageError: LocalizedError {
     case noCredentials
     case unauthorized
+    case rateLimited(retryAfter: TimeInterval?)
     case http(Int, String)
     case invalidResponse
 
@@ -12,6 +13,8 @@ enum UsageError: LocalizedError {
             return "Claude Code 로그인 정보를 찾을 수 없습니다. 터미널에서 `claude`를 실행해 로그인하세요."
         case .unauthorized:
             return "토큰이 만료되었습니다. 터미널에서 `claude`를 한 번 실행하면 갱신됩니다."
+        case .rateLimited:
+            return "요청이 너무 잦아 잠시 후 다시 시도합니다."
         case let .http(code, body):
             return "HTTP \(code): \(body.prefix(120))"
         case .invalidResponse:
@@ -51,6 +54,9 @@ enum UsageFetcher {
         switch http.statusCode {
         case 200: break
         case 401, 403: throw UsageError.unauthorized
+        case 429:
+            let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+            throw UsageError.rateLimited(retryAfter: retryAfter)
         default: throw UsageError.http(http.statusCode, String(decoding: data, as: UTF8.self))
         }
 
