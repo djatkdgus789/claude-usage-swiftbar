@@ -88,7 +88,7 @@ Weekly  76%       │ Fable   30%
 reset 3d 1h       │ reset 3d 1h
 ```
 
-- 기본값(`auto`)은 응답에서 키 이름에 `fable` 이 들어간 항목을 Fable 한도로 사용합니다.
+- Fable 한도는 응답의 `limits` 배열에서 `kind: "weekly_scoped"`, `scope.model.display_name: "Fable"` 인 항목을 읽습니다 (기본값 `auto`).
 - 다른 이름으로 온다면 SwiftBar → 플러그인 설정에서 `CLAUDE_FABLE_KEY` 를 그 키로 바꾸세요.
   응답 키 확인: README 아래 "API 응답 확인" 명령 참고.
 - 오른쪽 칸이 "응답에 없음" 이면 해당 계정의 응답에 Fable 한도가 없다는 뜻입니다.
