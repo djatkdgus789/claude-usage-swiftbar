@@ -22,6 +22,8 @@ final class SnapshotTests: XCTestCase {
     }
 
     func testRenderWidgets() throws {
+        let now = self.now
+        let sample = self.sample
         var errored = sample
         errored.error = "토큰이 만료되었습니다."
 

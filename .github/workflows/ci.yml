@@ -53,6 +53,7 @@ jobs:
             -derivedDataPath build -destination 'platform=macOS' $SIGNING -quiet test
 
       - name: Smoke test (launch app with fake credentials)
+        if: success() || failure()
         run: |
           APP=build/Build/Products/Release/ClaudeUsage.app
           mkdir -p ~/.claude
