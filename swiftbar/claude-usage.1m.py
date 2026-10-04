@@ -1,23 +1,23 @@
 #!/usr/bin/python3
 # <xbar.title>Claude Usage</xbar.title>
 # <xbar.version>v1.2</xbar.version>
-# <xbar.desc>Claude 구독(Pro/Max/Team)의 5시간 세션 · 주간 사용량을 메뉴 막대에 표시합니다. 여러 계정 지원.</xbar.desc>
-# <xbar.dependencies>python3, Claude Code (로그인 상태)</xbar.dependencies>
+# <xbar.desc>Shows Claude subscription (Pro/Max/Team) 5-hour session and weekly usage in the menu bar. Supports multiple accounts.</xbar.desc>
+# <xbar.dependencies>python3, Claude Code (logged in)</xbar.dependencies>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 # <swiftbar.environment>[CLAUDE_FABLE_KEY=auto]</swiftbar.environment>
 """
-Xcode 없이 쓰는 Claude 사용량 메뉴 막대 플러그인 (SwiftBar / xbar).
+Claude usage menu bar plugin for SwiftBar / xbar (no Xcode needed).
 
-파일 이름의 `.1m.` 은 1분마다 실행된다는 뜻이다.
-Claude Code 가 저장한 OAuth 토큰을 읽어 Claude Code 의 `/usage` 와 같은 엔드포인트를 조회한다.
+The `.1m.` in the file name means it runs every minute.
+It reads the OAuth token stored by Claude Code and queries the same endpoint as Claude Code's `/usage`.
 
-여러 계정: Claude Code 를 계정마다 다른 설정 폴더로 로그인하면
-(예: `CLAUDE_CONFIG_DIR=~/.claude-max claude` 후 `/login`) 키체인에
-`Claude Code-credentials-…` 항목이 따로 생긴다. 이 플러그인은 그런 항목과
-`~/.claude*/.credentials.json` 을 모두 찾아 계정별로 표시한다.
-429(요청 한도 초과) 응답을 받으면 해당 계정은 캐시를 보여주며 잠시 쉰다.
+Multiple accounts: log in to Claude Code with a separate config dir per account
+(e.g. `CLAUDE_CONFIG_DIR=~/.claude-max claude`, then `/login`) and each gets its own
+`Claude Code-credentials-…` keychain item. This plugin finds all of those items plus
+`~/.claude*/.credentials.json` and shows each account.
+On HTTP 429 (rate limited) an account shows its cached data and backs off for a while.
 """
 import json
 import os
@@ -36,21 +36,21 @@ CACHE_PATH = os.path.expanduser("~/Library/Caches/claude-usage-swiftbar.json")
 DEFAULT_BACKOFF = 5 * 60
 
 TITLES = {
-    "five_hour": "5시간 세션",
-    "seven_day": "주간 한도",
-    "seven_day_sonnet": "주간 Sonnet",
-    "seven_day_opus": "주간 Opus",
-    "seven_day_oauth_apps": "주간 OAuth 앱",
-    "extra_usage": "추가 사용량",
+    "five_hour": "5-hour session",
+    "seven_day": "Weekly",
+    "seven_day_sonnet": "Weekly Sonnet",
+    "seven_day_opus": "Weekly Opus",
+    "seven_day_oauth_apps": "Weekly OAuth apps",
+    "extra_usage": "Extra usage",
 }
 ORDER = list(TITLES)
 SHORT = {"five_hour": "5h", "seven_day": "7d"}
-# 응답에는 내부 코드명 항목(예: iguana_necktie)이 섞여 올 수 있다.
-# 알려진 한도와 5시간 / 주간 계열 키만 표시한다.
+# The response may contain internal codename entries (e.g. iguana_necktie).
+# Only show known limits and five_hour* / seven_day* keys.
 DISPLAY_PREFIXES = ("five_hour", "seven_day")
 
 
-# 주간 줄 오른쪽에 보여줄 Fable 한도의 키. "auto" 면 이름에 fable 이 들어간 항목을 쓴다.
+# Key of the Fable weekly limit. "auto" uses the entry whose key contains "fable".
 FABLE_KEY = (os.environ.get("CLAUDE_FABLE_KEY") or "auto").strip()
 
 
@@ -94,11 +94,11 @@ def run_security(args):
 
 
 def keychain_services():
-    """키체인에서 `Claude Code-credentials*` 서비스 이름을 모두 찾는다 (비밀 값은 읽지 않음)."""
+    """Find all `Claude Code-credentials*` service names in the keychain (does not read secrets)."""
     dump = run_security(["dump-keychain"]) or ""
     names = set(re.findall(r'"svce"<blob>="(%s[^"]*)"' % re.escape(KEYCHAIN_PREFIX), dump))
     names.add(KEYCHAIN_PREFIX)
-    # 기본 항목을 먼저, 나머지는 이름순
+    # Default item first, the rest by name
     return sorted(names, key=lambda n: (n != KEYCHAIN_PREFIX, n))
 
 
@@ -121,7 +121,7 @@ def credential_files():
 
 
 def discover_accounts():
-    """[{key, source, token, plan}] — 같은 토큰은 한 번만."""
+    """[{key, source, token, plan}] — each token only once."""
     accounts, tokens = [], set()
 
     def add(key, source, creds):
@@ -145,7 +145,7 @@ def discover_accounts():
 # ---------------------------------------------------------------- API
 
 def parse_date(value):
-    """ISO8601 문자열 → epoch 초. Python 3.9 의 fromisoformat 제약(Z, 소수점 자릿수)을 보완한다."""
+    """ISO8601 string -> epoch seconds. Works around Python 3.9 fromisoformat limits (Z suffix, fraction digits)."""
     if not isinstance(value, str):
         return None
     s = value.strip().replace("Z", "+00:00")
@@ -166,7 +166,7 @@ def parse_date(value):
 
 def parse_windows(data):
     if not isinstance(data, dict):
-        raise UsageError("사용량 응답을 해석할 수 없습니다.")
+        raise UsageError("Could not parse the usage response.")
     windows = []
     for key, value in data.items():
         if not isinstance(value, dict) or not is_displayed(key):
@@ -183,12 +183,12 @@ def parse_windows(data):
 
 
 def parse_model_limits(limits, existing):
-    """`limits` 배열의 모델별 주간 한도 (예: Fable).
+    """Per-model weekly limits from the `limits` array (e.g. Fable).
 
-    응답 예: {"kind": "weekly_scoped", "group": "weekly", "percent": 13,
+    Example entry: {"kind": "weekly_scoped", "group": "weekly", "percent": 13,
              "resets_at": "...", "scope": {"model": {"display_name": "Fable"}}}
-    → {"id": "seven_day_model_fable", "title": "주간 Fable", ...}
-    seven_day_opus 처럼 이미 고정 키로 온 모델은 건너뛴다.
+    -> {"id": "seven_day_model_fable", "title": "Weekly Fable", ...}
+    Models already reported by a fixed key (e.g. seven_day_opus) are skipped.
     """
     out = []
     if not isinstance(limits, list):
@@ -209,7 +209,7 @@ def parse_model_limits(limits, existing):
         if wid in existing:
             continue
         existing.add(wid)
-        out.append({"id": wid, "title": "주간 " + name, "utilization": float(pct),
+        out.append({"id": wid, "title": "Weekly " + name, "utilization": float(pct),
                     "resets_at": parse_date(item.get("resets_at"))})
     return out
 
@@ -226,21 +226,21 @@ def api_get(path, token):
             body = resp.read()
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
-            raise UsageError("토큰이 만료되었습니다. 이 계정으로 claude 를 한 번 실행하면 갱신됩니다.")
+            raise UsageError("Token expired. Run claude once with this account to refresh it.")
         if e.code == 429:
             retry = e.headers.get("Retry-After") if e.headers else None
             try:
                 retry = float(retry) if retry else None
             except ValueError:
                 retry = None
-            raise UsageError("요청이 너무 잦아 잠시 후 다시 시도합니다.", retry_after=retry or DEFAULT_BACKOFF)
-        raise UsageError("HTTP %d 오류" % e.code)
+            raise UsageError("Rate limited. Will retry shortly.", retry_after=retry or DEFAULT_BACKOFF)
+        raise UsageError("HTTP error %d" % e.code)
     except (urllib.error.URLError, OSError) as e:
-        raise UsageError("네트워크 오류: %s" % getattr(e, "reason", e))
+        raise UsageError("Network error: %s" % getattr(e, "reason", e))
     try:
         return json.loads(body)
     except ValueError:
-        raise UsageError("사용량 응답을 해석할 수 없습니다.")
+        raise UsageError("Could not parse the usage response.")
 
 
 def fetch_usage(token):
@@ -256,7 +256,7 @@ def load_cache():
     except (OSError, ValueError):
         return {"accounts": {}}
     if not isinstance(cache.get("accounts"), dict):
-        return {"accounts": {}}  # 이전 버전(단일 계정) 캐시는 버린다
+        return {"accounts": {}}  # Discard caches from the old single-account version
     return cache
 
 
@@ -300,7 +300,7 @@ def update(now, force=False):
         update_account(entry, account, now, force)
         cache["accounts"][account["key"]] = entry
     cache["error"] = None if accounts else (
-        "Claude Code 로그인 정보를 찾을 수 없습니다. 터미널에서 claude 실행 후 /login 하세요.")
+        "No Claude Code login found. Run claude in a terminal and /login.")
     save_cache(cache)
     return cache
 
@@ -332,15 +332,15 @@ def humanize(seconds):
     days, rem = divmod(minutes, 60 * 24)
     hours, mins = divmod(rem, 60)
     if days:
-        return "%d일 %d시간" % (days, hours)
+        return "%dd %dh" % (days, hours)
     if hours:
-        return "%d시간 %d분" % (hours, mins)
-    return "%d분" % mins
+        return "%dh %dm" % (hours, mins)
+    return "%dm" % mins
 
 
 def title(key):
     if key not in TITLES and is_fable(key):
-        return "주간 Fable"
+        return "Weekly Fable"
     return TITLES.get(key, key.replace("_", " ").title())
 
 
@@ -350,7 +350,7 @@ def plan_name(entry):
 
 
 def short_names(entries):
-    """메뉴 막대용 계정 약칭: 플랜 첫 글자(T, M, P …), 겹치면 번호를 붙인다."""
+    """Short account names for the menu bar: plan initial (T, M, P …), numbered when duplicated."""
     names = [plan_name(e)[0].upper() for e in entries]
     counts = {n: names.count(n) for n in names}
     seen = {}
@@ -365,7 +365,7 @@ def short_names(entries):
 
 
 def headline(entry, now):
-    """계정 하나의 메뉴 막대 요약 (5h 우선, 없으면 첫 한도)."""
+    """Menu bar summary for one account (5-hour limit, else the first limit)."""
     windows = entry.get("windows") or []
     if not windows:
         return None
@@ -381,10 +381,10 @@ def render_full(w, now):
     ]
     r = w.get("resets_at")
     if r and r > now:
-        when = datetime.fromtimestamp(r).strftime("%m/%d %H:%M")
-        out.append("%s 후 초기화 (%s) | size=11 color=gray" % (humanize(r - now), when))
+        when = datetime.fromtimestamp(r).strftime("%b %d %H:%M")
+        out.append("Resets in %s (%s) | size=11 color=gray" % (humanize(r - now), when))
     elif r:
-        out.append("초기화됨 | size=11 color=gray")
+        out.append("Reset | size=11 color=gray")
     return out
 
 
@@ -392,7 +392,7 @@ def render(cache, now):
     entries = [cache["accounts"][k] for k in cache.get("order", []) if k in cache["accounts"]]
     lines = []
 
-    # ---- 메뉴 막대 제목
+    # ---- Menu bar title
     with_data = [e for e in entries if e.get("windows")]
     any_error = any(e.get("error") for e in entries) or cache.get("error")
     if len(entries) == 1 and with_data:
@@ -421,7 +421,7 @@ def render(cache, now):
     if cache.get("error"):
         lines.append("⚠︎ %s | color=#FF3B30 size=11" % cache["error"])
 
-    # ---- 계정별 상세
+    # ---- Per-account details
     shorts = short_names(entries)
     for i, (short, e) in enumerate(zip(shorts, entries)):
         if i:
@@ -431,7 +431,7 @@ def render(cache, now):
             name = "[%s] %s" % (short, name)
         lines.append("%s | size=13" % name)
         windows = list(e.get("windows") or [])
-        # 주간 Fable 은 주간 한도 바로 아래에 둔다
+        # Put Weekly Fable right below Weekly
         fable = next((w for w in windows if is_fable(w["id"])), None)
         if fable is not None and any(w["id"] == "seven_day" for w in windows):
             windows.remove(fable)
@@ -442,18 +442,18 @@ def render(cache, now):
         if e.get("error"):
             lines.append("⚠︎ %s | color=#FF3B30 size=11" % e["error"])
         if e.get("fetched_at"):
-            lines.append("업데이트: %s | size=11 color=gray"
+            lines.append("Updated: %s | size=11 color=gray"
                          % datetime.fromtimestamp(e["fetched_at"]).strftime("%H:%M:%S"))
 
     lines.append("---")
-    lines.append("지금 새로고침 | refresh=true sfimage=arrow.clockwise")
-    lines.append("claude.ai 사용량 열기 | href=https://claude.ai/settings/usage sfimage=safari")
+    lines.append("Refresh now | refresh=true sfimage=arrow.clockwise")
+    lines.append("Open claude.ai usage | href=https://claude.ai/settings/usage sfimage=safari")
     return "\n".join(lines)
 
 
 def main():
     now = time.time()
-    # SwiftBar 의 '새로고침' 메뉴는 백오프를 무시하도록 한다.
+    # A manual refresh from the SwiftBar menu ignores the backoff.
     force = os.environ.get("SWIFTBAR_PLUGIN_REFRESH_REASON") == "MenuAction"
     print(render(update(now, force=force), now))
 
