@@ -61,6 +61,23 @@ make install
 
 Xcode에서 직접 빌드하려면 `make open` 으로 프로젝트를 연 뒤 `ClaudeUsage` 스킴을 실행하세요.
 
+## Xcode 없이 쓰기: 메뉴 막대 플러그인 (SwiftBar)
+
+Xcode 를 설치하지 않았다면 [SwiftBar](https://swiftbar.app) 플러그인으로 메뉴 막대에 사용량을 띄울 수 있습니다.
+바탕화면 위젯은 없지만 Command Line Tools 의 `python3` 만 있으면 됩니다.
+
+```bash
+git clone -b main https://github.com/djatkdgus789/claude-usage-widget.git
+cd claude-usage-widget
+swiftbar/install.sh
+```
+
+- `install.sh` 는 SwiftBar 가 없으면 Homebrew 로 설치하고, 플러그인 폴더(기본 `~/SwiftBarPlugins`)에 `claude-usage.1m.py` 를 연결합니다.
+- 메뉴 막대에 `5h 42% · 7d 18%` 처럼 표시되고, 클릭하면 한도별 막대 · 초기화까지 남은 시간이 나옵니다.
+- 1분마다 갱신하며, 429 응답을 받으면 캐시된 값을 보여주며 잠시 쉽니다. **지금 새로고침** 메뉴로 즉시 갱신할 수 있습니다.
+- 처음 실행할 때 키체인 접근 허용 창이 뜨면 **항상 허용**을 누르세요.
+- 수동 확인: `swiftbar/claude-usage.1m.py` 를 터미널에서 직접 실행하면 메뉴 내용이 출력됩니다.
+
 ## 문제 해결
 
 | 증상 | 해결 |
@@ -78,6 +95,7 @@ Xcode에서 직접 빌드하려면 `make open` 으로 프로젝트를 연 뒤 `C
 ```
 App/        메뉴 막대 앱 (데이터 수집, 키체인 읽기, API 호출)
 Widget/     WidgetKit 확장 (소형/중형/대형 위젯)
+swiftbar/   Xcode 없이 쓰는 SwiftBar 메뉴 막대 플러그인
 Shared/     앱과 위젯이 공유하는 모델, App Group 저장소, 게이지 뷰
 project.yml XcodeGen 프로젝트 정의
 Config.xcconfig  공통 빌드 설정 (개인 설정은 Local.xcconfig)

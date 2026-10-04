@@ -70,6 +70,18 @@ jobs:
           cat "$FILE"
           grep -q '"error"' "$FILE"
 
+      - name: SwiftBar plugin (system python3, fake credentials)
+        if: success() || failure()
+        run: |
+          mkdir -p ~/.claude
+          echo '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-invalid","subscriptionType":"pro"}}' > ~/.claude/.credentials.json
+          /usr/bin/python3 --version
+          bash -n swiftbar/install.sh
+          out="$(/usr/bin/python3 swiftbar/claude-usage.1m.py)"
+          echo "$out"
+          echo "$out" | head -n1 | grep -q "Claude"
+          echo "$out" | grep -q "토큰이 만료"
+
       - name: Print snapshots (base64)
         if: always()
         run: |
