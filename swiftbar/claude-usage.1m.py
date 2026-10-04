@@ -19,7 +19,6 @@ Claude Code 가 저장한 OAuth 토큰을 읽어 Claude Code 의 `/usage` 와 �
 `~/.claude*/.credentials.json` 을 모두 찾아 계정별로 표시한다.
 429(요청 한도 초과) 응답을 받으면 해당 계정은 캐시를 보여주며 잠시 쉰다.
 """
-import hashlib
 import json
 import os
 import re
@@ -35,7 +34,6 @@ SECURITY = os.environ.get("CLAUDE_USAGE_SECURITY_BIN", "/usr/bin/security")
 KEYCHAIN_PREFIX = "Claude Code-credentials"
 CACHE_PATH = os.path.expanduser("~/Library/Caches/claude-usage-swiftbar.json")
 DEFAULT_BACKOFF = 5 * 60
-PROFILE_TTL = 24 * 3600
 
 TITLES = {
     "five_hour": "5시간 세션",
@@ -249,23 +247,6 @@ def fetch_usage(token):
     return parse_windows(api_get("/api/oauth/usage", token))
 
 
-def fetch_profile_label(token):
-    """계정 이메일 / 조직 이름 (실패하면 None). 계정 구분용이라 없어도 동작한다."""
-    try:
-        data = api_get("/api/oauth/profile", token)
-    except UsageError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    account = data.get("account") if isinstance(data.get("account"), dict) else {}
-    org = data.get("organization") if isinstance(data.get("organization"), dict) else {}
-    email = account.get("email") or account.get("email_address")
-    org_name = org.get("name")
-    if email and org_name and org_name not in email:
-        return "%s · %s" % (email, org_name)
-    return email or org_name
-
-
 # ---------------------------------------------------------------- cache
 
 def load_cache():
@@ -290,10 +271,6 @@ def save_cache(cache):
         pass
 
 
-def token_id(token):
-    return hashlib.sha256(token.encode()).hexdigest()[:16]
-
-
 def update_account(entry, account, now, force):
     entry["source"] = account["source"]
     if account.get("plan"):
@@ -310,12 +287,6 @@ def update_account(entry, account, now, force):
         if e.retry_after:
             entry["next_allowed"] = now + e.retry_after
         return
-    # 이메일 등 계정 이름은 하루에 한 번만 확인한다 (토큰이 바뀌면 다시)
-    tid = token_id(account["token"])
-    if entry.get("profile_token") != tid or now - entry.get("profile_checked", 0) > PROFILE_TTL:
-        entry["label"] = fetch_profile_label(account["token"]) or entry.get("label")
-        entry["profile_token"] = tid
-        entry["profile_checked"] = now
 
 
 def update(now, force=False):
@@ -508,7 +479,6 @@ def render(cache, now):
         if len(entries) > 1:
             name = "[%s] %s" % (short, name)
         lines.append("%s | size=13" % name)
-        lines.append("%s | size=11 color=gray" % (e.get("label") or e.get("source", "")))
         windows = e.get("windows") or []
         fable = next((w for w in windows if is_fable(w["id"])), None)
         weekly = next((w for w in windows if w["id"] == "seven_day"), None)

@@ -107,7 +107,7 @@ CLAUDE_CONFIG_DIR=~/.claude-max claude    # → /login 으로 개인 Max 계정 
 
 플러그인은 키체인의 `Claude Code-credentials*` 항목과 `~/.claude*/.credentials.json` 을 모두 찾아
 계정별로 표시합니다. 메뉴 막대에는 `T 42% · M 18%` 처럼 플랜 첫 글자와 5시간 사용률이 나오고,
-메뉴에서 계정별 상세(가능하면 이메일 표시)를 볼 수 있습니다.
+메뉴에서 플랜별 상세를 볼 수 있습니다.
 
 - 두 번째 계정을 평소에 쓰려면 `alias claude-max='CLAUDE_CONFIG_DIR=~/.claude-max claude'` 를 셸 설정에 추가하세요.
 - 저장된 계정 목록 확인: `security dump-keychain | grep '"Claude Code-credentials'`
