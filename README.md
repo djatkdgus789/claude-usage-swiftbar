@@ -78,6 +78,21 @@ swiftbar/install.sh
 - 처음 실행할 때 키체인 접근 허용 창이 뜨면 **항상 허용**을 누르세요.
 - 수동 확인: `swiftbar/claude-usage.1m.py` 를 터미널에서 직접 실행하면 메뉴 내용이 출력됩니다.
 
+### 주간 전체 │ 주간 Fable
+
+메뉴의 주간 줄은 세로로 반 나뉘어 왼쪽에 주간 전체, 오른쪽에 주간 Fable 한도를 보여줍니다.
+
+```
+주간 전체  76%      │ 주간 Fable  30%
+███████░░░░░        │ ███░░░░░░░░░
+↻ 3일 1시간         │ ↻ 3일 1시간
+```
+
+- 기본값(`auto`)은 응답에서 키 이름에 `fable` 이 들어간 항목을 Fable 한도로 사용합니다.
+- 다른 이름으로 온다면 SwiftBar → 플러그인 설정에서 `CLAUDE_FABLE_KEY` 를 그 키로 바꾸세요.
+  응답 키 확인: README 아래 "API 응답 확인" 명령 참고.
+- 오른쪽 칸이 "응답에 없음" 이면 해당 계정의 응답에 Fable 한도가 없다는 뜻입니다.
+
 ### 여러 계정 함께 보기 (예: Team + 개인 Max)
 
 Claude Code 는 설정 폴더 하나에 로그인 하나만 저장합니다. 두 번째 계정은 **다른 설정 폴더**로 로그인하세요.
@@ -97,6 +112,14 @@ CLAUDE_CONFIG_DIR=~/.claude-max claude    # → /login 으로 개인 Max 계정 
 - 두 번째 계정을 평소에 쓰려면 `alias claude-max='CLAUDE_CONFIG_DIR=~/.claude-max claude'` 를 셸 설정에 추가하세요.
 - 저장된 계정 목록 확인: `security dump-keychain | grep '"Claude Code-credentials'`
 - 토큰은 각 계정으로 `claude` 를 실행할 때 갱신되므로, 오래 안 쓴 계정은 "토큰이 만료되었습니다" 가 뜰 수 있습니다.
+
+### API 응답 확인
+
+```bash
+TOKEN=$(security find-generic-password -s "Claude Code-credentials" -w | python3 -c 'import json,sys;print(json.load(sys.stdin)["claudeAiOauth"]["accessToken"])')
+curl -s https://api.anthropic.com/api/oauth/usage -H "Authorization: Bearer $TOKEN" -H "anthropic-beta: oauth-2025-04-20" | python3 -m json.tool
+```
+출력에는 사용률과 초기화 시각만 있고 토큰은 포함되지 않습니다.
 
 ## 문제 해결
 

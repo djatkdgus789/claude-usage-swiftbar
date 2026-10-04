@@ -1,11 +1,12 @@
 #!/usr/bin/python3
 # <xbar.title>Claude Usage</xbar.title>
-# <xbar.version>v1.1</xbar.version>
+# <xbar.version>v1.2</xbar.version>
 # <xbar.desc>Claude 구독(Pro/Max/Team)의 5시간 세션 · 주간 사용량을 메뉴 막대에 표시합니다. 여러 계정 지원.</xbar.desc>
 # <xbar.dependencies>python3, Claude Code (로그인 상태)</xbar.dependencies>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
+# <swiftbar.environment>[CLAUDE_FABLE_KEY=auto]</swiftbar.environment>
 """
 Xcode 없이 쓰는 Claude 사용량 메뉴 막대 플러그인 (SwiftBar / xbar).
 
@@ -25,6 +26,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -51,8 +53,18 @@ SHORT = {"five_hour": "5h", "seven_day": "7d"}
 DISPLAY_PREFIXES = ("five_hour", "seven_day")
 
 
+# 주간 줄 오른쪽에 보여줄 Fable 한도의 키. "auto" 면 이름에 fable 이 들어간 항목을 쓴다.
+FABLE_KEY = (os.environ.get("CLAUDE_FABLE_KEY") or "auto").strip()
+
+
+def is_fable(key):
+    if FABLE_KEY.lower() != "auto":
+        return key == FABLE_KEY
+    return "fable" in key.lower()
+
+
 def is_displayed(key):
-    return key in TITLES or key.startswith(DISPLAY_PREFIXES)
+    return key in TITLES or key.startswith(DISPLAY_PREFIXES) or is_fable(key)
 
 CLAUDE_ORANGE = "#D97757"
 
@@ -324,6 +336,8 @@ def humanize(seconds):
 
 
 def title(key):
+    if key not in TITLES and is_fable(key):
+        return "주간 Fable"
     return TITLES.get(key, key.replace("_", " ").title())
 
 
@@ -354,6 +368,77 @@ def headline(entry, now):
         return None
     primary = next((w for w in windows if w["id"] == "five_hour"), windows[0])
     return effective(primary, now)
+
+
+def render_full(w, now):
+    pct = effective(w, now)
+    out = [
+        "%s   %d%% | color=%s" % (title(w["id"]), round(pct), color_for(pct)),
+        "%s | font=Menlo size=11 color=%s" % (bar(pct), color_for(pct)),
+    ]
+    r = w.get("resets_at")
+    if r and r > now:
+        when = datetime.fromtimestamp(r).strftime("%m/%d %H:%M")
+        out.append("%s 후 초기화 (%s) | size=11 color=gray" % (humanize(r - now), when))
+    elif r:
+        out.append("초기화됨 | size=11 color=gray")
+    return out
+
+
+# ---- 주간 줄을 세로로 반 나눠 왼쪽: 주간 전체, 오른쪽: 주간 Fable
+SPLIT_BAR = 12
+SPLIT_COL = 20  # 왼쪽 칸 표시 폭 (고정폭 글꼴 기준 칸 수)
+ANSI_RESET = "\033[0m"
+ANSI_DIM = "\033[90m"
+
+
+def text_width(text):
+    """고정폭 글꼴에서 차지하는 칸 수 (한글 등 전각 문자는 2칸)."""
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def pad(text, width):
+    return text + " " * max(0, width - text_width(text))
+
+
+def ansi_for(pct):
+    if pct >= 90:
+        return "\033[91m"  # 빨강
+    if pct >= 70:
+        return "\033[33m"  # 주황(노랑)
+    return ""
+
+
+def paint(text, code):
+    return code + text + ANSI_RESET if code else text
+
+
+def split_cells(w, label, now):
+    """(제목 줄, 막대 줄, 초기화 줄, 색) — 항목이 없으면 회색 자리 표시."""
+    if w is None:
+        return ("%s  –" % label, "·" * SPLIT_BAR, "응답에 없음", ANSI_DIM)
+    pct = effective(w, now)
+    r = w.get("resets_at")
+    if r and r > now:
+        reset = "↻ " + humanize(r - now)
+    elif r:
+        reset = "초기화됨"
+    else:
+        reset = ""
+    return ("%s  %d%%" % (label, round(pct)), bar(pct, SPLIT_BAR), reset, ansi_for(pct))
+
+
+def render_split(weekly, fable, now):
+    left = split_cells(weekly, "주간 전체", now)
+    right = split_cells(fable, "주간 Fable", now)
+    out = []
+    for i in range(3):
+        l_text, r_text = left[i], right[i]
+        l_code = left[3] if i < 2 else ANSI_DIM
+        r_code = right[3] if i < 2 else ANSI_DIM
+        line = paint(pad(l_text, SPLIT_COL), l_code) + "│ " + paint(r_text, r_code)
+        out.append("%s | font=Menlo size=%d ansi=true trim=false" % (line, 12 if i == 0 else 11))
+    return out
 
 
 def render(cache, now):
@@ -399,16 +484,16 @@ def render(cache, now):
             name = "[%s] %s" % (short, name)
         lines.append("%s | size=13" % name)
         lines.append("%s | size=11 color=gray" % (e.get("label") or e.get("source", "")))
-        for w in e.get("windows") or []:
-            pct = effective(w, now)
-            lines.append("%s   %d%% | color=%s" % (title(w["id"]), round(pct), color_for(pct)))
-            lines.append("%s | font=Menlo size=11 color=%s" % (bar(pct), color_for(pct)))
-            r = w.get("resets_at")
-            if r and r > now:
-                when = datetime.fromtimestamp(r).strftime("%m/%d %H:%M")
-                lines.append("%s 후 초기화 (%s) | size=11 color=gray" % (humanize(r - now), when))
-            elif r:
-                lines.append("초기화됨 | size=11 color=gray")
+        windows = e.get("windows") or []
+        fable = next((w for w in windows if is_fable(w["id"])), None)
+        weekly = next((w for w in windows if w["id"] == "seven_day"), None)
+        for w in windows:
+            if w is fable and weekly is not None:
+                continue  # 주간 줄 오른쪽 칸에 함께 표시
+            if w is weekly:
+                lines.extend(render_split(weekly, fable, now))
+            else:
+                lines.extend(render_full(w, now))
         if e.get("error"):
             lines.append("⚠︎ %s | color=#FF3B30 size=11" % e["error"])
         if e.get("fetched_at"):
