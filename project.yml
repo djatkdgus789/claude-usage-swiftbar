@@ -36,7 +36,9 @@ targets:
         PRODUCT_NAME: ClaudeUsage
     dependencies:
       - target: ClaudeUsageWidget
-    scheme: {}
+    scheme:
+      testTargets:
+        - ClaudeUsageTests
   ClaudeUsageWidget:
     type: app-extension
     platform: macOS
@@ -58,3 +60,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).widget
         SKIP_INSTALL: YES
+  ClaudeUsageTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+      - Shared
+      - App/UsageFetcher.swift
+      - Widget/WidgetViews.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).tests
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_HARDENED_RUNTIME: NO
