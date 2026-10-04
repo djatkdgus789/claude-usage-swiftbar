@@ -78,20 +78,13 @@ swiftbar/install.sh
 - 처음 실행할 때 키체인 접근 허용 창이 뜨면 **항상 허용**을 누르세요.
 - 수동 확인: `swiftbar/claude-usage.1m.py` 를 터미널에서 직접 실행하면 메뉴 내용이 출력됩니다.
 
-### 주간 전체 │ 주간 Fable
+### 주간 Fable
 
-메뉴의 주간 줄은 세로로 반 나뉘어 왼쪽에 주간 전체, 오른쪽에 주간 Fable 한도를 보여줍니다.
+메뉴에는 5시간 세션, 주간 한도, 주간 Fable 이 같은 모양(제목 · 막대 · 초기화 시각)으로 차례로 표시됩니다.
 
-```
-Weekly  76%       │ Fable   30%
-[=========...]    │ [====........]
-reset 3d 1h       │ reset 3d 1h
-```
-
-- Fable 한도는 응답의 `limits` 배열에서 `kind: "weekly_scoped"`, `scope.model.display_name: "Fable"` 인 항목을 읽습니다 (기본값 `auto`).
-- 다른 이름으로 온다면 SwiftBar → 플러그인 설정에서 `CLAUDE_FABLE_KEY` 를 그 키로 바꾸세요.
-  응답 키 확인: README 아래 "API 응답 확인" 명령 참고.
-- 오른쪽 칸이 "응답에 없음" 이면 해당 계정의 응답에 Fable 한도가 없다는 뜻입니다.
+- Fable 한도는 응답의 `limits` 배열에서 `kind: "weekly_scoped"`, `scope.model.display_name: "Fable"` 인 항목을 읽습니다.
+- 다른 키를 Fable 로 쓰려면 SwiftBar → 플러그인 설정에서 `CLAUDE_FABLE_KEY` 를 바꾸세요 (기본값 `auto`).
+- 응답에 Fable 한도가 없는 계정은 해당 줄이 표시되지 않습니다.
 
 ### 여러 계정 함께 보기 (예: Team + 개인 Max)
 
@@ -107,7 +100,7 @@ CLAUDE_CONFIG_DIR=~/.claude-max claude    # → /login 으로 개인 Max 계정 
 
 플러그인은 키체인의 `Claude Code-credentials*` 항목과 `~/.claude*/.credentials.json` 을 모두 찾아
 계정별로 표시합니다. 메뉴 막대에는 `T 42% · M 18%` 처럼 플랜 첫 글자와 5시간 사용률이 나오고,
-메뉴에서 계정별 상세(가능하면 이메일 표시)를 볼 수 있습니다.
+메뉴에서 플랜별 상세를 볼 수 있습니다.
 
 - 두 번째 계정을 평소에 쓰려면 `alias claude-max='CLAUDE_CONFIG_DIR=~/.claude-max claude'` 를 셸 설정에 추가하세요.
 - 저장된 계정 목록 확인: `security dump-keychain | grep '"Claude Code-credentials'`
