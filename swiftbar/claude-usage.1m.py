@@ -179,8 +179,41 @@ def parse_windows(data):
         if value.get("is_enabled") is False:
             continue
         windows.append({"id": key, "utilization": float(util), "resets_at": parse_date(value.get("resets_at"))})
+    windows.extend(parse_model_limits(data.get("limits"), {w["id"] for w in windows}))
     windows.sort(key=lambda w: (ORDER.index(w["id"]) if w["id"] in ORDER else len(ORDER), w["id"]))
     return windows
+
+
+def parse_model_limits(limits, existing):
+    """`limits` 배열의 모델별 주간 한도 (예: Fable).
+
+    응답 예: {"kind": "weekly_scoped", "group": "weekly", "percent": 13,
+             "resets_at": "...", "scope": {"model": {"display_name": "Fable"}}}
+    → {"id": "seven_day_model_fable", "title": "주간 Fable", ...}
+    seven_day_opus 처럼 이미 고정 키로 온 모델은 건너뛴다.
+    """
+    out = []
+    if not isinstance(limits, list):
+        return out
+    for item in limits:
+        if not isinstance(item, dict) or item.get("kind") != "weekly_scoped":
+            continue
+        scope = item.get("scope") if isinstance(item.get("scope"), dict) else {}
+        model = scope.get("model") if isinstance(scope.get("model"), dict) else {}
+        name = model.get("display_name") or model.get("id")
+        pct = item.get("percent")
+        if not isinstance(name, str) or not name or isinstance(pct, bool) or not isinstance(pct, (int, float)):
+            continue
+        slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+        if "seven_day_" + slug in existing:
+            continue
+        wid = "seven_day_model_" + slug
+        if wid in existing:
+            continue
+        existing.add(wid)
+        out.append({"id": wid, "title": "주간 " + name, "utilization": float(pct),
+                    "resets_at": parse_date(item.get("resets_at"))})
+    return out
 
 
 def api_get(path, token):
@@ -372,7 +405,7 @@ def headline(entry, now):
 def render_full(w, now):
     pct = effective(w, now)
     out = [
-        "%s   %d%% | color=%s" % (title(w["id"]), round(pct), color_for(pct)),
+        "%s   %d%% | color=%s" % (w.get("title") or title(w["id"]), round(pct), color_for(pct)),
         "%s | font=Menlo size=11 color=%s" % (bar(pct), color_for(pct)),
     ]
     r = w.get("resets_at")
