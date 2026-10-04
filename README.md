@@ -84,7 +84,7 @@ swiftbar/install.sh
 
 ```
 Weekly  76%       │ Fable   30%
-[=========...]   │ [====........]
+[=========...]    │ [====........]
 reset 3d 1h       │ reset 3d 1h
 ```
 
