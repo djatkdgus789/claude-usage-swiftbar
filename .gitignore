@@ -1,11 +1,3 @@
 .DS_Store
-build/
-DerivedData/
-*.xcodeproj
-xcuserdata/
-Local.xcconfig
-# XcodeGen 이 project.yml 로부터 생성
-App/Info.plist
-App/ClaudeUsage.entitlements
-Widget/Info.plist
-Widget/ClaudeUsageWidget.entitlements
+__pycache__/
+*.pyc

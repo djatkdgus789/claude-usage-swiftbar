@@ -6,94 +6,27 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-test:
+  plugin:
+    # macOS so the plugin runs on the same system python3 (/usr/bin/python3) SwiftBar uses.
     runs-on: macos-15
-    timeout-minutes: 30
-    env:
-      # CI 에서는 팀 서명 없이 ad-hoc 서명으로 빌드한다.
-      SIGNING: >-
-        CODE_SIGN_STYLE=Manual
-        CODE_SIGN_IDENTITY=-
-        DEVELOPMENT_TEAM=
-        APP_GROUP_ID=CITEAM0000.com.ci.claudeusage
-        BUNDLE_ID_PREFIX=com.ci.claudeusage
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: System python version
+        run: /usr/bin/python3 --version
 
-      - name: Generate project
-        run: |
-          touch Local.xcconfig
-          xcodegen generate
+      - name: Unit and end-to-end tests
+        run: PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s tests -v
 
-      - name: Build
-        run: |
-          xcodebuild -project ClaudeUsage.xcodeproj -scheme ClaudeUsage -configuration Release \
-            -derivedDataPath build $SIGNING -quiet build
+      - name: Installer syntax
+        run: bash -n swiftbar/install.sh
 
-      - name: Inspect app bundle
-        run: |
-          APP=build/Build/Products/Release/ClaudeUsage.app
-          set -x
-          ls -R "$APP/Contents" | head -50
-          test -d "$APP/Contents/PlugIns/ClaudeUsageWidget.appex"
-          plutil -p "$APP/Contents/Info.plist"
-          plutil -p "$APP/Contents/PlugIns/ClaudeUsageWidget.appex/Contents/Info.plist"
-          test "$(plutil -extract AppGroupIdentifier raw "$APP/Contents/Info.plist")" = "CITEAM0000.com.ci.claudeusage"
-          codesign -d --entitlements - "$APP"
-          codesign -d --entitlements - "$APP/Contents/PlugIns/ClaudeUsageWidget.appex"
-
-      - name: Unit & snapshot tests
-        run: |
-          mkdir -p snapshots
-          TEST_RUNNER_SNAPSHOT_DIR="$PWD/snapshots" \
-          xcodebuild -project ClaudeUsage.xcodeproj -scheme ClaudeUsage -configuration Debug \
-            -derivedDataPath build -destination 'platform=macOS' $SIGNING -quiet test
-
-      - name: Smoke test (launch app with fake credentials)
-        if: success() || failure()
-        run: |
-          APP=build/Build/Products/Release/ClaudeUsage.app
-          mkdir -p ~/.claude
-          echo '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-invalid","subscriptionType":"pro"}}' > ~/.claude/.credentials.json
-          "$APP/Contents/MacOS/ClaudeUsage" > app.log 2>&1 &
-          PID=$!
-          sleep 20
-          kill -0 $PID && echo "✅ app still running after 20s" || { echo "❌ app exited"; cat app.log; exit 1; }
-          kill $PID || true
-          cat app.log | tail -20
-          FILE=~/Library/Group\ Containers/CITEAM0000.com.ci.claudeusage/usage.json
-          ls -la ~/Library/Group\ Containers/ | grep -i claude || true
-          echo "--- usage.json ---"
-          cat "$FILE"
-          grep -q '"error"' "$FILE"
-
-      - name: SwiftBar plugin (system python3, fake credentials)
-        if: success() || failure()
+      - name: Smoke test against the real API (fake token)
         run: |
           mkdir -p ~/.claude
           echo '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-invalid","subscriptionType":"pro"}}' > ~/.claude/.credentials.json
-          /usr/bin/python3 --version
-          bash -n swiftbar/install.sh
-          out="$(/usr/bin/python3 swiftbar/claude-usage.1m.py)"
+          out="$(PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 swiftbar/claude-usage.1m.py)"
           echo "$out"
           echo "$out" | head -n1 | grep -q "Claude"
-          echo "$out" | grep -q "토큰이 만료"
-
-      - name: Print snapshots (base64)
-        if: always()
-        run: |
-          for f in snapshots/*.png; do
-            echo "=== SNAPSHOT $(basename "$f") ==="
-            base64 -i "$f" | tr -d '\n'
-            echo
-            echo "=== END ==="
-          done
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: snapshots
-          path: snapshots
+          echo "$out" | grep -q "Token expired"

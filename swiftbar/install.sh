@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# SwiftBar 를 설치하고 Claude 사용량 플러그인을 연결한다. Xcode 가 필요 없다.
+# Installs SwiftBar and links the Claude usage plugin. No Xcode needed.
 set -euo pipefail
 cd "$(dirname "$0")"
 PLUGIN="$PWD/claude-usage.1m.py"
 
 if ! /usr/bin/python3 -c 'import sys; sys.exit(0)' 2>/dev/null; then
-  echo "❌ python3 가 없습니다. 'xcode-select --install' 로 Command Line Tools 를 설치하세요."
+  echo "❌ python3 not found. Install the Command Line Tools with 'xcode-select --install'."
   exit 1
 fi
 
 if [[ ! -d /Applications/SwiftBar.app && ! -d "$HOME/Applications/SwiftBar.app" ]]; then
   if command -v brew >/dev/null; then
-    echo "→ SwiftBar 설치 중 (brew install --cask swiftbar)"
+    echo "→ Installing SwiftBar (brew install --cask swiftbar)"
     brew install --cask swiftbar
   else
-    echo "❌ SwiftBar 가 없습니다. https://swiftbar.app 에서 받아 설치한 뒤 다시 실행하세요."
+    echo "❌ SwiftBar not found. Install it from https://swiftbar.app and run this again."
     exit 1
   fi
 fi
@@ -27,11 +27,11 @@ fi
 mkdir -p "$dir"
 chmod +x "$PLUGIN"
 ln -sf "$PLUGIN" "$dir/claude-usage.1m.py"
-echo "✅ 플러그인 연결: $dir/claude-usage.1m.py → $PLUGIN"
+echo "✅ Plugin linked: $dir/claude-usage.1m.py → $PLUGIN"
 
-echo "→ 동작 확인 (첫 줄이 메뉴 막대에 표시됩니다):"
+echo "→ Test run (the first line is shown in the menu bar):"
 "$PLUGIN" | head -n 1
 
 open -a SwiftBar
-echo "✅ SwiftBar 실행. 메뉴 막대에 'Claude' 사용률이 나타납니다."
-echo "   이미 실행 중이었다면 SwiftBar 메뉴 > Refresh All 을 누르세요."
+echo "✅ SwiftBar started. Claude usage will appear in the menu bar."
+echo "   If SwiftBar was already running, choose Refresh All from its menu."
