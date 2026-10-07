@@ -18,7 +18,16 @@ Multiple accounts: log in to Claude Code with a separate config dir per account
 `Claude Code-credentials-…` keychain item. This plugin finds all of those items plus
 `~/.claude*/.credentials.json` and shows each account.
 On HTTP 429 (rate limited) an account shows its cached data and backs off for a while.
+
+Token refresh: the access token lasts about 8 hours. When it expires, the plugin uses the
+refresh token the same way Claude Code does and writes the new credentials back to the
+original keychain item (or file) in the same format. Refresh tokens rotate, so not saving
+them would log Claude Code out. Refreshes happen only near expiry or on a 401, at most once
+per REFRESH_COOLDOWN per account, and never again with a refresh token the server rejected.
 """
+import binascii
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -34,6 +43,15 @@ SECURITY = os.environ.get("CLAUDE_USAGE_SECURITY_BIN", "/usr/bin/security")
 KEYCHAIN_PREFIX = "Claude Code-credentials"
 CACHE_PATH = os.path.expanduser("~/Library/Caches/claude-usage-swiftbar.json")
 DEFAULT_BACKOFF = 5 * 60
+
+TOKEN_URL = os.environ.get("CLAUDE_USAGE_TOKEN_URL", "https://platform.claude.com/v1/oauth/token")
+CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code's OAuth client
+# Only refresh this close to expiry. Before that, leave it to Claude Code.
+REFRESH_MARGIN = 2 * 60
+# Minimum time between refresh attempts per account (successful or not)
+REFRESH_COOLDOWN = 10 * 60
+# Serializes refreshes so two plugin runs never spend the same refresh token.
+REFRESH_LOCK = os.path.expanduser("~/Library/Caches/claude-usage-token-refresh.lock")
 
 TITLES = {
     "five_hour": "5-hour session",
@@ -76,13 +94,23 @@ class UsageError(Exception):
 
 def parse_credentials(text):
     try:
-        oauth = json.loads(text)["claudeAiOauth"]
+        raw = json.loads(text)
+        oauth = raw["claudeAiOauth"]
         token = oauth["accessToken"]
     except (ValueError, KeyError, TypeError):
         return None
     if not token:
         return None
-    return {"token": token, "plan": oauth.get("subscriptionType")}
+    expires_at = oauth.get("expiresAt")
+    scopes = oauth.get("scopes")
+    return {
+        "token": token,
+        "plan": oauth.get("subscriptionType"),
+        "refresh_token": oauth.get("refreshToken") or None,
+        "expires_at": expires_at / 1000.0 if isinstance(expires_at, (int, float)) else None,
+        "scopes": scopes if isinstance(scopes, list) else [],
+        "raw": raw,
+    }
 
 
 def run_security(args):
@@ -130,16 +158,57 @@ def discover_accounts():
             accounts.append(dict(creds, key=key, source=source))
 
     for service in keychain_services():
-        raw = run_security(["find-generic-password", "-s", service, "-w"])
-        if raw and raw.strip():
-            add("keychain:" + service, service, parse_credentials(raw.strip()))
+        add("keychain:" + service, service, read_source("keychain:" + service))
     for path in credential_files():
-        try:
-            with open(path, encoding="utf-8") as f:
-                add("file:" + path, path.replace(os.path.expanduser("~"), "~"), parse_credentials(f.read()))
-        except OSError:
-            continue
+        add("file:" + path, path.replace(os.path.expanduser("~"), "~"), read_source("file:" + path))
     return accounts
+
+
+def read_source(key):
+    """Read the credentials for an account key (`keychain:<service>` / `file:<path>`)."""
+    kind, _, where = key.partition(":")
+    if kind == "keychain":
+        raw = run_security(["find-generic-password", "-s", where, "-w"])
+        return parse_credentials(raw.strip()) if raw and raw.strip() else None
+    try:
+        with open(where, encoding="utf-8") as f:
+            return parse_credentials(f.read())
+    except OSError:
+        return None
+
+
+def security_quote(value):
+    return '"%s"' % value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def write_source(key, raw):
+    """Save refreshed credentials back where they came from, in Claude Code's format."""
+    kind, _, where = key.partition(":")
+    text = json.dumps(raw, separators=(",", ":"))
+    if kind == "file":
+        tmp = where + ".tmp"
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(tmp, where)
+            return True
+        except OSError:
+            return False
+    attrs = run_security(["find-generic-password", "-s", where]) or ""
+    m = re.search(r'"acct"<blob>="([^"]*)"', attrs)
+    account = m.group(1) if m else (os.environ.get("USER") or "")
+    # Like Claude Code, pass the command on stdin of `security -i` so the secret never
+    # shows up in process arguments.
+    command = "add-generic-password -U -a %s -s %s -X %s\n" % (
+        security_quote(account), security_quote(where),
+        security_quote(binascii.hexlify(text.encode("utf-8")).decode("ascii")))
+    try:
+        out = subprocess.run([SECURITY, "-i"], input=command, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    # `security -i` exits 0 even when the command fails, so check stderr too.
+    return out.returncode == 0 and not out.stderr.strip()
 
 
 # ---------------------------------------------------------------- API
@@ -214,6 +283,10 @@ def parse_model_limits(limits, existing):
     return out
 
 
+class Unauthorized(UsageError):
+    pass
+
+
 def api_get(path, token):
     req = urllib.request.Request(API_BASE + path, headers={
         "Authorization": "Bearer " + token,
@@ -226,7 +299,7 @@ def api_get(path, token):
             body = resp.read()
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
-            raise UsageError("Token expired. Run claude once with this account to refresh it.")
+            raise Unauthorized("Token expired. Run claude once with this account to refresh it.")
         if e.code == 429:
             retry = e.headers.get("Retry-After") if e.headers else None
             try:
@@ -245,6 +318,85 @@ def api_get(path, token):
 
 def fetch_usage(token):
     return parse_windows(api_get("/api/oauth/usage", token))
+
+
+# ---------------------------------------------------------------- token refresh
+
+def fingerprint(secret):
+    """Short digest stored in the cache instead of the secret itself."""
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+
+
+def needs_refresh(account, now):
+    exp = account.get("expires_at")
+    return exp is not None and exp - REFRESH_MARGIN <= now
+
+
+def request_refresh(creds):
+    """(response, rejected) — rejected means the refresh token can no longer be used."""
+    body = {"grant_type": "refresh_token", "refresh_token": creds["refresh_token"], "client_id": CLIENT_ID}
+    if creds.get("scopes"):
+        body["scope"] = " ".join(creds["scopes"])
+    req = urllib.request.Request(TOKEN_URL, data=json.dumps(body).encode("utf-8"), headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "claude-usage-swiftbar/1.1",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return None, e.code in (400, 401, 403)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None, False
+    if not isinstance(data, dict) or not data.get("access_token") or \
+            isinstance(data.get("expires_in"), bool) or not isinstance(data.get("expires_in"), (int, float)):
+        return None, False
+    return data, False
+
+
+def refresh_account(entry, account, now):
+    """Refresh and save the token, returning the updated account, or None if not refreshed."""
+    if not account.get("refresh_token"):
+        return None
+    if entry.get("refresh_rejected") == fingerprint(account["refresh_token"]):
+        return None
+    if now < entry.get("refresh_attempted_at", 0) + REFRESH_COOLDOWN:
+        return None
+    try:
+        os.makedirs(os.path.dirname(REFRESH_LOCK), exist_ok=True)
+        lock = open(REFRESH_LOCK, "w")
+    except OSError:
+        return None
+    with lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # Claude Code may have refreshed it while we waited for the lock.
+        current = read_source(account["key"])
+        if current is None:
+            return None
+        if current["token"] != account["token"] and not needs_refresh(current, now):
+            return dict(account, **current)
+        if not current.get("refresh_token"):
+            return None
+        entry["refresh_attempted_at"] = now
+        data, rejected = request_refresh(current)
+        if data is None:
+            if rejected:
+                entry["refresh_rejected"] = fingerprint(current["refresh_token"])
+            return None
+        raw = current["raw"]
+        oauth = raw["claudeAiOauth"]
+        oauth["accessToken"] = data["access_token"]
+        oauth["refreshToken"] = data.get("refresh_token") or current["refresh_token"]
+        oauth["expiresAt"] = int((time.time() + data["expires_in"]) * 1000)
+        if isinstance(data.get("refresh_token_expires_in"), (int, float)):
+            oauth["refreshTokenExpiresAt"] = int((time.time() + data["refresh_token_expires_in"]) * 1000)
+        if isinstance(data.get("scope"), str) and data["scope"].strip():
+            oauth["scopes"] = data["scope"].split()
+        saved = write_source(account["key"], raw)
+        entry["refresh_error"] = None if saved else (
+            "Could not save the refreshed token. Claude Code may need /login.")
+        return dict(account, **parse_credentials(json.dumps(raw)))
 
 
 # ---------------------------------------------------------------- cache
@@ -277,13 +429,29 @@ def update_account(entry, account, now, force):
         entry["plan"] = account["plan"]
     if not force and now < entry.get("next_allowed", 0):
         return
+    refreshed = False
+    if needs_refresh(account, now):
+        account = refresh_account(entry, account, now) or account
+        refreshed = not needs_refresh(account, now)
     try:
-        entry["windows"] = fetch_usage(account["token"])
+        try:
+            windows = fetch_usage(account["token"])
+        except Unauthorized:
+            # Rejected before its expiry time (e.g. revoked elsewhere): try one refresh.
+            fresh = None if refreshed else refresh_account(entry, account, now)
+            if fresh is None:
+                raise
+            account = fresh
+            windows = fetch_usage(account["token"])
+        entry["windows"] = windows
         entry["fetched_at"] = now
-        entry["error"] = None
+        entry["error"] = entry.get("refresh_error")
         entry["next_allowed"] = 0
     except UsageError as e:
         entry["error"] = str(e)
+        if isinstance(e, Unauthorized) and account.get("refresh_token") and \
+                entry.get("refresh_rejected") == fingerprint(account["refresh_token"]):
+            entry["error"] = "Login expired. Run claude with this account and /login."
         if e.retry_after:
             entry["next_allowed"] = now + e.retry_after
         return

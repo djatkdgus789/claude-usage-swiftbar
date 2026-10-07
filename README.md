@@ -72,13 +72,17 @@ The plugin finds every `Claude Code-credentials*` item and every
 `~/.claude*/.credentials.json`, skips duplicate tokens, and labels accounts by plan
 initial (`M`, `T`, `P`; numbered if two share a plan).
 
-Tokens are refreshed by Claude Code itself, so an account you haven't used in a while
-may show "Token expired" until you run `claude` with it once.
+When an access token (about 8 hours) expires, the plugin refreshes it the same way
+Claude Code does and saves the new credentials back to the same keychain item or file,
+so Claude Code stays logged in. It refreshes only within 2 minutes of expiry or after a
+401, at most once every 10 minutes per account, and never retries a refresh token the
+server rejected.
 
 ## How it works
 
 1. Reads the OAuth token Claude Code stored in the keychain (`security find-generic-password`)
-   or in `.credentials.json`. The token is only sent to `api.anthropic.com`.
+   or in `.credentials.json`. Tokens are only sent to Anthropic (`api.anthropic.com`, and
+   `platform.claude.com` when refreshing).
 2. Calls `GET https://api.anthropic.com/api/oauth/usage` (header `anthropic-beta: oauth-2025-04-20`).
 3. Shows `five_hour`, `seven_day`, other `seven_day_*` limits, and per-model weekly limits
    from the `limits` array (`kind: "weekly_scoped"`, e.g. Fable). Internal codename entries
@@ -109,6 +113,7 @@ The output contains only usage numbers and reset times, not the token.
 | --- | --- |
 | "No Claude Code login found" | Run `claude` and `/login` |
 | "Token expired" | Run `claude` once with that account, then **Refresh now** |
+| "Login expired" | The refresh token was rejected; run `claude` with that account and `/login` |
 | "Rate limited" | Wait; the plugin retries automatically |
 | Only one account shown | Log in to the other account with `CLAUDE_CONFIG_DIR` (see above) |
 | Nothing in the menu bar | Run `swiftbar/claude-usage.1m.py` in a terminal to see its output |
